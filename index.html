@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本せどり キャッシュフロー体験ゲーム</title>
+<meta name="description" content="今月仕入れたお金は、来月から3ヶ月に分けて1.3倍で戻ってくる。固定費に食われる前に回せ——本せどりの資金繰りを1ヶ月ずつ体で覚えるゲーム。">
+<meta property="og:title" content="本せどり キャッシュフロー体験ゲーム">
+<meta property="og:description" content="仕入れたお金は3ヶ月に分けて1.3倍で戻ってくる。お金の動きを体で覚える資金繰りゲーム。">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23FF7A59'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
+<style>html,body{margin:0;padding:0;background:#FFF3E6}#root{min-height:100vh}</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState } = React;
+const { ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } = Recharts;
+
+/* ===== 柔らかポップなカラーパレット ===== */
+const CREAM   = "#FFF3E6";
+const CARD    = "#FFFFFF";
+const INK     = "#4A3B32";
+const MUTED   = "#A8988B";
+const CORAL   = "#FF7A59";
+const CORAL_D = "#F0603E";
+const MINT    = "#20B49E";
+const MINT_BG = "#E4F7F2";
+const YELLOW  = "#FFC24B";
+const RED     = "#F0655A";
+const CORAL_BG= "#FFE9E1";
+const BLUE    = "#5B9BD5";
+
+/* ===== ゲーム定数（自動プレイ2000回検証済み：ツールフル活用で約9〜12ヶ月／なしで約19ヶ月クリア） ===== */
+const START  = 30;     // 種銭30万円
+const FIXED  = 2;      // 固定費2万円/月（資材・ガソリン・アプリ代）※月初に支払い
+const MARGIN = 0.30;   // 基本の利益率30%
+const GOAL   = 100;    // もうけの合計（固定費・ツール代を引いた後）100万円でクリア＝「100万稼ぐ！」
+const MAXM   = 84;     // 7年
+
+/* ツール（月額サブスク）：ONの間、毎月「月初」に支払い。効果は「新しく仕入れるぶん」から。フル装備で月10万 */
+const TOOLS = {
+  kaitei:   { emo: "📱", name: "価格改定ツール", fee: 1, effect: "即売れ価格に自動調整：回収が3ヶ月→1〜2ヶ月に！", },
+  research: { emo: "🔍", name: "リサーチツール", fee: 1, effect: "プレ値本を発掘：利益率30%→40%に", },
+  daiko:    { emo: "🚚", name: "出品代行", fee: 6, effect: "作業を外注：月の仕入れ上限が1.5倍に", },
+};
+
+// せどり力レベル → 1ヶ月に仕入れられる上限（万円）
+const CAP = [0, 30, 50, 80, 120, 180, 260, 380, 520, 680, 850];
+const EXP = [0, 0, 5, 15, 35, 80, 160, 300, 520, 850, 1300];
+const LV_NAME = ["", "かけだし", "みならい", "せどらー", "目利き", "商売人", "せどりマスター", "仕入れの達人", "本の目利き王", "せどり仙人", "せどりの神"];
+const levelUp = (lv, exp) => { while (lv < 10 && exp >= EXP[lv + 1]) lv++; return lv; };
+
+const fmt = (v) => {
+  const n = Math.round(v * 10) / 10;
+  if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(2).replace(/\.?0+$/, "")}億円`;
+  if (Number.isInteger(n)) return `${n.toLocaleString()}万円`;
+  return `${n.toFixed(1)}万円`;
+};
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ym = (m) => `${Math.floor(m / 12)}年${(m % 12)}ヶ月目`;
+const sumV = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+
+/* 毎月の仕入れペース→月のもうけ（固定費2万を引いた後・基本30%）のはしご */
+const LADDER = [
+  { pace: 40,  label: "おこづかい" },
+  { pace: 73,  label: "バイト代" },
+  { pace: 107, label: "新卒の給料" },
+  { pace: 173, label: "ベテラン会社員" },
+  { pace: 340, label: "月収100万🏆" },
+];
+
+/* ===== イベント（柔らかトーン） ===== */
+const EVENTS = [
+  { emo: "📈", name: "プレ値ヒット！", desc: "仕入れた本がアニメ化でプレ値に。今月の売上にボーナス♪", kind: "good", k: "bonus" },
+  { emo: "🎉", name: "SNSでバズった！", desc: "紹介ポストが伸びて目利きの評判UP。せどり力がぐんと成長。", kind: "good", k: "exp" },
+  { emo: "⚡", name: "爆売れ月間", desc: "今月はよく売れる！来月売れる予定だった本まで前倒しで売れた。", kind: "good", k: "fast" },
+  { emo: "📉", name: "相場が下がった", desc: "ライバル増加で値下げ販売。今月の入金がちょっと目減り。", kind: "bad", k: "cheap" },
+  { emo: "💥", name: "不良在庫が出た", desc: "検品ミスで在庫の1割が売り物にならず…。", kind: "bad", k: "lost" },
+];
+const rollEvent = () => (Math.random() < 0.3 ? EVENTS[Math.floor(Math.random() * EVENTS.length)] : null);
+
+/* ===== 初期状態 ===== */
+const init = () => ({
+  month: 0, cash: START, dueS: {}, dueC: {}, level: 1, exp: 0,
+  tools: { kaitei: false, research: false, daiko: false },
+  monthBought: 0, buyHist: [], lastBuy: 0, lastIncome: 0, lastFees: 0, lastProfit: 0, recent: [], cum: 0,
+  hist: [{ m: 0, income: 0, buy: 0 }],
+  log: [{ t: "スタート", m: `種銭${START}万円でせどり開始！毎月あたまに固定費${FIXED}万円（＋ツール代）の支払いがある。仕入れたお金は来月から3ヶ月に分けて1.3倍で戻ってくるよ📚`, k: "info" }],
+  over: null,
+});
+
+function App() {
+  const [s, setS] = useState(init);
+  const [showHelp, setShowHelp] = useState(() => { try { return localStorage.getItem("cf_help6") !== "done"; } catch (e) { return true; } });
+  const closeHelp = () => { setShowHelp(false); try { localStorage.setItem("cf_help6", "done"); } catch (e) {} };
+
+  const push = (log, t, m, k = "info") => [{ t, m, k }, ...log].slice(0, 30);
+  const feesNow = Object.entries(s.tools).filter(([k, on]) => on).reduce((a, [k]) => a + TOOLS[k].fee, 0);
+  const capNow = Math.round(CAP[s.level] * (s.tools.daiko ? 1.5 : 1));
+  const buyRoom = Math.max(0, capNow - s.monthBought);
+  const canBuy = Math.min(buyRoom, Math.floor(s.cash * 10) / 10);
+  const stock = sumV(s.dueC);                                  // 在庫（原価ベース）
+  const pace = s.buyHist.length ? s.buyHist.slice(-3).reduce((a, b) => a + b, 0) / Math.min(3, s.buyHist.length) : s.monthBought;
+  const marginNow = s.tools.research ? 0.40 : MARGIN;
+  const steadyProfit = pace * marginNow - FIXED - feesNow;     // このペースを続けた時の月のもうけ
+  const recentAvg = s.recent.length >= 3 ? s.recent.reduce((a, b) => a + b, 0) / 3 : null;
+  const leadNow = s.tools.kaitei ? 2 : 3;
+  const paymentNow = FIXED + feesNow;                          // 月初の支払い額
+
+  /* 仕入れ */
+  const buy = (amt) => setS((p) => {
+    if (p.over) return p;
+    const cap = Math.round(CAP[p.level] * (p.tools.daiko ? 1.5 : 1));
+    const room = Math.max(0, cap - p.monthBought);
+    const a = Math.min(amt, room, p.cash);
+    if (a <= 0) return p;
+    const mgn = p.tools.research ? 0.40 : MARGIN;
+    const W = p.tools.kaitei ? [0.6, 0.4] : [1 / 3, 1 / 3, 1 / 3];
+    const dueS = { ...p.dueS }, dueC = { ...p.dueC };
+    W.forEach((w, i) => {
+      dueS[p.month + 1 + i] = (dueS[p.month + 1 + i] || 0) + a * w * (1 + mgn);
+      dueC[p.month + 1 + i] = (dueC[p.month + 1 + i] || 0) + a * w;
+    });
+    return {
+      ...p, cash: p.cash - a, monthBought: p.monthBought + a, dueS, dueC,
+      log: push(p.log, `${p.month}ヶ月目`, p.tools.kaitei
+        ? `${fmt(a)}ぶん仕入れた📦 即売れ価格で計${fmt(a * (1 + mgn))}——来月${fmt(a * (1 + mgn) * 0.6)}・再来月${fmt(a * (1 + mgn) * 0.4)}で戻ってくる！`
+        : `${fmt(a)}ぶん仕入れた📦 来月から3ヶ月かけて計${fmt(a * (1 + mgn))}になって戻ってくる（毎月約${fmt(a * (1 + mgn) / 3)}ずつ）`),
+    };
+  });
+
+  /* ツールのON/OFF */
+  const toggleTool = (key) => setS((p) => {
+    if (p.over) return p;
+    const on = !p.tools[key];
+    const t = TOOLS[key];
+    return {
+      ...p, tools: { ...p.tools, [key]: on },
+      log: push(p.log, `${p.month}ヶ月目`, on
+        ? `${t.emo} ${t.name}を導入！（月額${fmt(t.fee)}）${t.effect}`
+        : `${t.emo} ${t.name}を解約した。月額${fmt(t.fee)}の固定費が消えた`),
+    };
+  });
+
+  /* 1ヶ月進める */
+  const step = (p) => {
+    if (p.over) return p;
+    const month = p.month + 1;
+    let log = p.log;
+    const dueS = { ...p.dueS }, dueC = { ...p.dueC };
+    const fees = Object.entries(p.tools).filter(([k, on]) => on).reduce((a, [k]) => a + TOOLS[k].fee, 0);
+
+    // ① 月初の支払い（固定費＋ツール代）。払えなければその場で倒産——手加減なし
+    const payment = FIXED + fees;
+    if (p.cash < payment) {
+      log = push(log, `${month}ヶ月目`, `💸 月初の支払い${fmt(payment)}（固定費${fmt(FIXED)}${fees > 0 ? `＋ツール代${fmt(fees)}` : ""}）が払えない…！ 手元は${fmt(p.cash)}だけ。仕入れに使いすぎた。倒産。`, "bad");
+      return { ...p, month, cash: p.cash - payment, lastBuy: p.monthBought, lastIncome: 0, lastFees: fees,
+        hist: [...p.hist, { m: month, income: 0, buy: p.monthBought }], log, over: "bankrupt" };
+    }
+
+    // ② イベント
+    const ev = rollEvent();
+    let priceMul = 1, expBonus = 0, bonusRate = 0, lostNote = "";
+    if (ev) {
+      if (ev.k === "cheap") priceMul = 0.85;
+      if (ev.k === "exp") expBonus = 40;
+      if (ev.k === "bonus") bonusRate = 0.3;
+      if (ev.k === "fast") {  // 来月ぶんの半分を前倒し
+        const nS = dueS[month + 1] || 0, nC = dueC[month + 1] || 0;
+        dueS[month] = (dueS[month] || 0) + nS * 0.5; dueS[month + 1] = nS * 0.5;
+        dueC[month] = (dueC[month] || 0) + nC * 0.5; dueC[month + 1] = nC * 0.5;
+      }
+      if (ev.k === "lost") {  // 在庫の1割が消滅
+        let lost = 0;
+        for (const k of Object.keys(dueC)) { lost += dueC[k] * 0.1; dueC[k] *= 0.9; dueS[k] = (dueS[k] || 0) * 0.9; }
+        lostNote = `（在庫−${fmt(lost)}ぶん）`;
+      }
+    }
+
+    // 今月の入金：予定額±ゆらぎ（売れ残りは来月へ繰り越し・前倒しはお金を保存）
+    const baseS = dueS[month] || 0, baseC = dueC[month] || 0;
+    const j = 0.85 + Math.random() * 0.3;
+    let soldS = baseS, soldC = baseC;
+    if (j < 1) {
+      soldS = baseS * j; soldC = baseC * j;
+      dueS[month + 1] = (dueS[month + 1] || 0) + baseS * (1 - j);
+      dueC[month + 1] = (dueC[month + 1] || 0) + baseC * (1 - j);
+    } else if (j > 1) {
+      const availS = dueS[month + 1] || 0, availC = dueC[month + 1] || 0;
+      const exS = Math.min(availS, baseS * (j - 1));
+      const ratio = availS > 0 ? exS / availS : 0;
+      soldS = baseS + exS; soldC = baseC + availC * ratio;
+      dueS[month + 1] = availS - exS; dueC[month + 1] = availC * (1 - ratio);
+    }
+    delete dueS[month]; delete dueC[month];
+
+    const bonusCash = soldS * bonusRate;
+    const income = soldS * priceMul + bonusCash;
+    const gross = income - soldC;                  // 今月のもうけ（固定費・ツール代前）
+    let cash = p.cash - payment + income;          // 月初に支払い→月中に入金
+    let exp = p.exp + Math.max(0, gross) + expBonus;
+    const level = levelUp(p.level, exp);
+
+    const lastBuy = p.monthBought;
+    const buyHist = [...p.buyHist, lastBuy].slice(-6);
+
+    if (income > 0) log = push(log, `${month}ヶ月目`, `📬 入金${fmt(income)}（うち、もうけ${fmt(gross)}）。仕入れたお金が戻ってきた💰`, "good");
+    else log = push(log, `${month}ヶ月目`, `入金なし。仕入れていないとお金は入ってこないのに、固定費${fmt(FIXED + fees)}は毎月出ていく…`, "bad");
+    if (ev) log = push(log, `${month}ヶ月目`, `${ev.emo} ${ev.name} ${ev.desc}${lostNote}`, ev.kind);
+    if (level > p.level) log = push(log, `${month}ヶ月目`, `🎊 せどり力レベルアップ！ Lv${level}「${LV_NAME[level]}」に。月に${fmt(CAP[level])}まで仕入れられる！`, "good");
+
+    const monthProfit = gross - FIXED - fees;
+    const recent = [...p.recent, monthProfit].slice(-3);
+    const cum = p.cum + monthProfit;
+    const hist = [...p.hist, { m: month, income: Math.round(income * 10) / 10, buy: lastBuy }];
+
+    let over = null;
+    if (cum >= GOAL) {
+      over = "win";
+      log = push(log, `${month}ヶ月目`, `👑 もうけの合計が${fmt(GOAL)}を突破！ せどりで100万稼いだ！`, "good");
+    } else if (month >= MAXM) {
+      over = "timeup";
+      log = push(log, `${month}ヶ月目`, "🏁 7年間おつかれさま！ここまでよく回してきた。", "good");
+    }
+
+    return { ...p, month, cash, dueS, dueC, level, exp, monthBought: 0, buyHist, lastBuy, lastIncome: income, lastFees: fees, lastProfit: monthProfit, recent, cum, hist, log, over };
+  };
+  const next = (n) => setS((p) => { let st = p; for (let i = 0; i < n && !st.over; i++) st = step(st); return st; });
+
+  /* 入金予定（来月・再来月・3ヶ月後） */
+  const timeline = [1, 2, 3].map((d) => ({ d, amt: s.dueS[s.month + d] || 0 }));
+
+  /* ===== UI部品 ===== */
+  const Card = ({ children, style }) => (
+    <div style={{ background: CARD, borderRadius: 20, padding: 16, boxShadow: "0 6px 18px rgba(180,140,110,.14)", ...style }}>{children}</div>
+  );
+  const stat = (emo, label, value, color, sub) => (
+    <div style={{ background: CARD, borderRadius: 18, padding: "12px 12px", boxShadow: "0 5px 14px rgba(180,140,110,.13)" }}>
+      <div style={{ fontSize: 11, color: MUTED, fontWeight: 700 }}>{emo} {label}</div>
+      <div style={{ fontSize: 21, fontWeight: 800, color: color || INK, lineHeight: 1.3, marginTop: 2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: MUTED, marginTop: 1 }}>{sub}</div>}
+    </div>
+  );
+  const pill = (label, onClick, disabled, primary) => (
+    <button key={label} onClick={onClick} disabled={disabled}
+      style={{
+        fontFamily: "inherit", fontSize: 13.5, fontWeight: 800, padding: "9px 13px", borderRadius: 999, border: "none",
+        cursor: disabled ? "default" : "pointer",
+        background: disabled ? "#EFE3D8" : primary ? CORAL : CORAL_BG,
+        color: disabled ? "#C3B4A6" : primary ? "#fff" : CORAL_D,
+        boxShadow: disabled ? "none" : primary ? "0 4px 0 " + CORAL_D : "none",
+        transition: "transform .05s",
+      }}>{label}</button>
+  );
+  const flowRow = (emo, label, value, color) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0" }}>
+      <span style={{ fontSize: 12.5, fontWeight: 700, color: "#7d6c5e" }}>{emo} {label}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, color }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg,#FFE9D6 0%, ${CREAM} 240px)`, color: INK,
+      fontFamily: "'Zen Maru Gothic', 'Hiragino Maru Gothic ProN', sans-serif", paddingBottom: 130 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap');
+        *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+        button:active:not(:disabled){transform:translateY(1px);}
+        button:focus-visible{outline:3px solid ${YELLOW};outline-offset:2px;}
+        @media (prefers-reduced-motion: reduce){*{transition:none!important;}}
+      `}</style>
+
+      {/* ヘッダー */}
+      <header style={{ textAlign: "center", padding: "22px 16px 10px" }}>
+        <div style={{ display: "inline-block", background: "#fff", color: CORAL_D, fontSize: 11, fontWeight: 800,
+          padding: "4px 14px", borderRadius: 999, boxShadow: "0 3px 10px rgba(180,140,110,.15)", marginBottom: 10 }}>📚 キャッシュフローが学べる体験ゲーム</div>
+        <h1 style={{ fontSize: 25, margin: 0, fontWeight: 900, letterSpacing: 1, lineHeight: 1.35 }}>
+          本せどり<br /><span style={{ color: CORAL }}>お金が回る</span>体験ゲーム
+        </h1>
+        <p style={{ fontSize: 12.5, color: "#8a7565", margin: "8px 0 0", fontWeight: 700 }}>
+          仕入れたお金は<span style={{ color: MINT }}>来月から3ヶ月に分けて1.3倍</span>で戻ってくる。<br />
+          毎月<span style={{ color: CORAL_D }}>月初に固定費＋ツール代の支払い</span>——残しておかないと、倒産🌀
+        </p>
+        <button onClick={() => setShowHelp(true)}
+          style={{ marginTop: 10, fontFamily: "inherit", fontSize: 12, fontWeight: 800, padding: "6px 16px", borderRadius: 999,
+            border: "none", background: "#fff", color: MUTED, boxShadow: "0 3px 10px rgba(180,140,110,.13)", cursor: "pointer" }}>
+          ？ 遊び方
+        </button>
+      </header>
+
+      <main style={{ maxWidth: 540, margin: "0 auto", padding: "6px 14px", display: "grid", gap: 12 }}>
+
+        {/* 🎯 目標：100万稼ぐ！ */}
+        <Card style={{ padding: "13px 16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 7 }}>
+            <span style={{ fontSize: 14, fontWeight: 900 }}>🎯 目標：<span style={{ color: CORAL_D }}>100万稼ぐ！</span></span>
+            <span style={{ fontSize: 12, fontWeight: 800, color: s.cum >= 0 ? MINT : RED }}>
+              いま {s.cum >= 0 ? "" : "−"}{fmt(Math.abs(s.cum))}
+            </span>
+          </div>
+          <div style={{ height: 14, borderRadius: 999, background: "#F1E6DA", overflow: "hidden" }}>
+            <div style={{ width: `${clamp(s.cum / GOAL, 0, 1) * 100}%`, height: "100%", borderRadius: 999,
+              background: `linear-gradient(90deg, ${YELLOW}, ${CORAL})`, transition: "width .4s" }} />
+          </div>
+          <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 700, marginTop: 5 }}>
+            これまでの「もうけ」の合計（固定費・ツール代を引いた後）。{s.cum < 0 ? "最初は固定費でマイナスから始まるよ。回して取り返そう！" : `あと${fmt(Math.max(0, GOAL - s.cum))}！`}
+          </div>
+        </Card>
+
+        {/* ★中核1：今月のお金の動き */}
+        <Card style={{ background: MINT_BG }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+            <span style={{ fontSize: 14, fontWeight: 900 }}>💴 先月のお金の動き</span>
+            <span style={{ fontSize: 11.5, color: "#5a8f86", fontWeight: 700 }}>{ym(s.month)}／7年</span>
+          </div>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "8px 14px" }}>
+            {flowRow("🛒", "仕入れに使った", s.lastBuy > 0 ? `−${fmt(s.lastBuy)}` : "0円", s.lastBuy > 0 ? CORAL_D : MUTED)}
+            {flowRow("📬", "売れて入金", s.lastIncome > 0 ? `+${fmt(s.lastIncome)}` : "0円", s.lastIncome > 0 ? MINT : MUTED)}
+            {flowRow("🏠", "固定費（月初払い）", `−${fmt(FIXED)}`, MUTED)}
+            {s.lastFees > 0 && flowRow("🔧", "ツール代（月初払い）", `−${fmt(s.lastFees)}`, MUTED)}
+            <div style={{ borderTop: "2px dashed #E4D8C9", marginTop: 4, paddingTop: 6 }}>
+              {flowRow("＝", "手元のお金の増減", `${s.lastIncome - s.lastBuy - FIXED - s.lastFees >= 0 ? "+" : ""}${fmt(s.lastIncome - s.lastBuy - FIXED - s.lastFees)}`,
+                s.lastIncome - s.lastBuy - FIXED - s.lastFees >= 0 ? MINT : RED)}
+              {flowRow("💗", "うち、もうけ", `${s.lastProfit >= 0 ? "+" : ""}${fmt(s.lastProfit)}`, s.lastProfit >= 0 ? MINT : RED)}
+            </div>
+          </div>
+          <div style={{ fontSize: 10.5, color: "#5a8f86", fontWeight: 700, marginTop: 6, lineHeight: 1.6 }}>
+            ※「増減」がマイナスでも、仕入れたぶんは在庫になって戻ってくる。怖いのは戻る前に現金が尽きること！
+          </div>
+        </Card>
+
+        {/* ★中核2：入金予定 */}
+        <Card>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>⏳ これから戻ってくるお金</div>
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 10 }}>いまの在庫 {fmt(stock)} が、こう戻ってくる予定</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {timeline.map((t) => (
+              <div key={t.d} style={{ background: t.amt > 0 ? MINT_BG : "#FBF6EE", borderRadius: 14, padding: "10px 6px", textAlign: "center",
+                border: t.amt > 0 ? `2px solid ${MINT}` : "2px dashed #E8DCCB" }}>
+                <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 700 }}>{t.d === 1 ? "来月" : t.d === 2 ? "再来月" : "3ヶ月後"}</div>
+                <div style={{ fontSize: t.amt > 0 ? 15 : 13, fontWeight: 800, color: t.amt > 0 ? MINT : "#D8CBB8", marginTop: 3 }}>
+                  {t.amt > 0 ? `+${fmt(t.amt)}` : "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* KPI */}
+        <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          {stat("💰", "現金", fmt(s.cash), s.cash < paymentNow * 1.5 ? RED : INK, `月初の支払い${fmt(paymentNow)}を残しておこう`)}
+          {stat("📦", "在庫", fmt(stock), BLUE, "売れるのを待ってる本（原価）")}
+          {stat("📈", "月のもうけ", recentAvg != null ? fmt(recentAvg) : "計測中…", recentAvg != null && recentAvg >= 0 ? MINT : RED, "直近3ヶ月の平均")}
+          {stat("⭐", `せどり力 Lv${s.level}`, LV_NAME[s.level], YELLOW, `月${fmt(capNow)}まで仕入れOK${s.tools.daiko ? "（代行1.5倍込み）" : ""}`)}
+        </section>
+
+        {/* 仕入れ */}
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+            <span style={{ fontSize: 15, fontWeight: 900, color: CORAL_D }}>📚 本を仕入れる</span>
+            <span style={{ fontSize: 11, color: MUTED, fontWeight: 700 }}>今月あと {fmt(buyRoom)} まで</span>
+          </div>
+          <p style={{ fontSize: 11.5, color: MUTED, margin: "0 0 12px", fontWeight: 700, lineHeight: 1.6 }}>
+            使ったお金は来月から{leadNow}ヶ月{s.tools.kaitei ? "（6割→4割）" : "に分けて"}×{(1 + marginNow).toFixed(2)}倍で入金される。
+            <span style={{ color: CORAL_D }}>⚠️ 来月あたまの支払い{fmt(paymentNow)}は必ず残すこと。めいっぱい使うと倒産！</span>
+          </p>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+            {pill("+1万", () => buy(1), s.over || canBuy < 1)}
+            {pill("+5万", () => buy(5), s.over || canBuy < 5)}
+            {pill("+10万", () => buy(10), s.over || canBuy < 10)}
+            {pill("+30万", () => buy(30), s.over || canBuy < 30)}
+            {pill("+50万", () => buy(50), s.over || canBuy < 50)}
+            {pill(`めいっぱい(+${fmt(canBuy)})`, () => buy(canBuy), s.over || canBuy < 1, true)}
+          </div>
+        </Card>
+
+        {/* ツール */}
+        <Card>
+          <div style={{ fontSize: 15, fontWeight: 900, color: CORAL_D, marginBottom: 2 }}>🔧 ツールを導入する</div>
+          <p style={{ fontSize: 11.5, color: MUTED, margin: "0 0 10px", fontWeight: 700, lineHeight: 1.6 }}>
+            月額を払うと商売が強くなる。うまく使えば<b style={{ color: CORAL_D }}>1年で100万</b>も狙える。ただし月初の支払いが増える（フル装備で月10万）。いつでも解約OK。
+          </p>
+          {Object.entries(TOOLS).map(([key, t]) => {
+            const on = s.tools[key];
+            return (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 14,
+                background: on ? MINT_BG : "#FBF6EE", marginBottom: 6, border: on ? `2px solid ${MINT}` : "2px solid transparent" }}>
+                <div style={{ fontSize: 20 }}>{t.emo}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800 }}>{t.name} <span style={{ color: CORAL_D }}>月{fmt(t.fee)}</span></div>
+                  <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 700 }}>{t.effect}</div>
+                </div>
+                <button onClick={() => toggleTool(key)} disabled={!!s.over}
+                  style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 800, padding: "7px 14px", borderRadius: 999, border: "none",
+                    cursor: s.over ? "default" : "pointer",
+                    background: on ? MINT : CORAL_BG, color: on ? "#fff" : CORAL_D }}>
+                  {on ? "利用中✓" : "導入する"}
+                </button>
+              </div>
+            );
+          })}
+          {feesNow > 0 && <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textAlign: "right" }}>ツール代 合計 月{fmt(feesNow)}</div>}
+        </Card>
+
+        {/* はしご：仕入れペース→月収 */}
+        <Card>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 2 }}>📊 毎月いくら仕入れ続けると、月いくらもうかる？</div>
+          <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 700, marginBottom: 8 }}>もうけ＝仕入れ×30%−固定費2万（ツールで変わる）。いまのペース：月{fmt(pace)}</div>
+          {LADDER.map((r) => {
+            const reached = pace >= r.pace;
+            const isNext = !reached && (LADDER.find((x) => pace < x.pace) === r);
+            return (
+              <div key={r.pace} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3.5px 0",
+                opacity: reached ? 1 : isNext ? 0.95 : 0.45 }}>
+                <span style={{ width: 18, textAlign: "center", fontSize: 13 }}>{reached ? "✅" : isNext ? "👉" : "・"}</span>
+                <span style={{ fontSize: 12, fontWeight: 800, width: 106 }}>毎月{r.pace}万仕入れ</span>
+                <span style={{ fontSize: 12, color: MINT, fontWeight: 800, width: 76 }}>→月{Math.round(r.pace * MARGIN - FIXED)}万</span>
+                <span style={{ fontSize: 10.5, color: MUTED, fontWeight: 700 }}>{r.label}</span>
+              </div>
+            );
+          })}
+          <div style={{ height: 10, borderRadius: 999, background: "#F1E6DA", overflow: "hidden", marginTop: 8 }}>
+            <div style={{ width: `${clamp(steadyProfit / GOAL, 0, 1) * 100}%`, height: "100%", borderRadius: 999,
+              background: `linear-gradient(90deg, ${YELLOW}, ${CORAL})`, transition: "width .4s" }} />
+          </div>
+          <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 700, textAlign: "right", marginTop: 3 }}>
+            いまのペースを続けると月のもうけ 約{fmt(steadyProfit)}
+          </div>
+        </Card>
+
+        {/* グラフ：仕入れを入金が追いかける */}
+        <Card style={{ padding: "14px 8px 6px" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, margin: "0 0 4px 8px" }}>🔁 仕入れたお金を、入金が追いかける</div>
+          <div style={{ height: 160 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={s.hist} margin={{ top: 6, right: 14, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={MINT} stopOpacity={0.35} />
+                    <stop offset="100%" stopColor={MINT} stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="m" tick={{ fontSize: 9, fill: MUTED }} tickLine={false} axisLine={false}
+                  tickFormatter={(m) => `${Math.floor(m / 12)}年`} ticks={[0, 12, 24, 36, 48, 60, 72, 84]} />
+                <YAxis tick={{ fontSize: 9, fill: MUTED }} tickLine={false} axisLine={false} width={46}
+                  tickFormatter={(v) => (v >= 10000 ? `${(v / 10000).toFixed(1)}億` : `${v}万`)} />
+                <Tooltip formatter={(v, n) => [fmt(v), n === "income" ? "入金" : "仕入れ"]} labelFormatter={(m) => `${m}ヶ月目`}
+                  contentStyle={{ borderRadius: 12, border: "none", boxShadow: "0 6px 18px rgba(0,0,0,.12)", fontSize: 12 }} />
+                <Area type="monotone" dataKey="income" stroke={MINT} strokeWidth={2.2} fill="url(#g1)" />
+                <Line type="monotone" dataKey="buy" stroke={CORAL} strokeWidth={2} dot={false} strokeDasharray="5 3" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ fontSize: 10.5, color: MUTED, textAlign: "right", padding: "0 10px 2px", fontWeight: 700 }}>
+            <span style={{ color: MINT }}>▨</span> 入金　<span style={{ color: CORAL }}>┄</span> 仕入れ（すき間が、もうけ）
+          </div>
+        </Card>
+
+        {/* ログ */}
+        <Card style={{ maxHeight: 210, overflowY: "auto" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>📖 せどり日記</div>
+          {s.log.map((l, i) => (
+            <div key={i} style={{ fontSize: 11.5, lineHeight: 1.7, marginBottom: 3,
+              color: l.k === "good" ? "#1F9E8A" : l.k === "bad" ? RED : "#7d6c5e", fontWeight: 600 }}>
+              <span style={{ color: MUTED, marginRight: 6, fontWeight: 700 }}>{l.t}</span>{l.m}
+            </div>
+          ))}
+        </Card>
+
+        <details style={{ fontSize: 12, color: "#8a7565", background: "#fff", borderRadius: 16, padding: "12px 14px", boxShadow: "0 5px 14px rgba(180,140,110,.1)", fontWeight: 600 }}>
+          <summary style={{ cursor: "pointer", color: CORAL_D, fontWeight: 800 }}>💡 キャッシュフローの授業メモ</summary>
+          <ol style={{ margin: "8px 0 4px", paddingLeft: 18, lineHeight: 1.9 }}>
+            <li>仕入れに使ったお金は、<b>来月から3ヶ月に分けて1.3倍</b>で戻ってくる（利益率30%）</li>
+            <li>毎月<b>月初に固定費＋ツール代を支払う</b>。払えなければ即倒産——だから<b>支払いぶんの現金は必ず残す</b></li>
+            <li>毎月仕入れ続けると入金が重なり、<b>回り出す</b>——仕入れとほぼ同額が毎月戻ってくるようになる</li>
+            <li><b>ツールは月初の支払いを増やすが、回転と利益率を大きく上げる</b>。フル装備（月10万）でうまく回すと約1年で100万</li>
+            <li><b>月のもうけ ≒ 仕入れ×利益率 − 固定費・ツール代</b>。もうけを積み上げて合計100万を目指そう</li>
+            <li>在庫がたくさんあっても<b>現金が尽きたら倒産</b>（黒字倒産）。入金予定と手元現金をいつも見ておく</li>
+          </ol>
+        </details>
+      </main>
+
+      {/* 固定バー：来月へ */}
+      {!s.over && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 15, background: "rgba(255,243,230,.94)",
+          backdropFilter: "blur(6px)", borderTop: "1px solid #F0DEC9", padding: "10px 14px calc(12px + env(safe-area-inset-bottom,0px))" }}>
+          <div style={{ maxWidth: 540, margin: "0 auto", display: "flex", gap: 10, alignItems: "center" }}>
+            <div style={{ flex: "0 0 auto", fontSize: 10.5, color: "#8a7565", fontWeight: 700, lineHeight: 1.6 }}>
+              <div>現金 <strong style={{ color: s.cash < FIXED * 3 ? RED : INK, fontSize: 12 }}>{fmt(s.cash)}</strong></div>
+              <div>来月：月初払い <strong style={{ color: CORAL_D, fontSize: 12 }}>−{fmt(paymentNow)}</strong> 入金 <strong style={{ color: MINT, fontSize: 12 }}>+{fmt(s.dueS[s.month + 1] || 0)}</strong></div>
+            </div>
+            <button onClick={() => next(1)}
+              style={{ flex: 1, fontFamily: "inherit", fontSize: 17, fontWeight: 900, padding: "14px", borderRadius: 16, border: "none",
+                cursor: "pointer", background: `linear-gradient(135deg, ${CORAL}, ${YELLOW})`, color: "#fff", boxShadow: "0 5px 0 " + CORAL_D }}>
+              ▶ 来月へ
+            </button>
+            <button onClick={() => next(6)}
+              style={{ flex: "0 0 auto", fontFamily: "inherit", fontSize: 13, fontWeight: 800, padding: "14px 14px", borderRadius: 16,
+                cursor: "pointer", background: "#fff", color: CORAL_D, border: "none", boxShadow: "0 5px 0 #F0DEC9" }}>
+              ⏩ 半年
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 遊び方 */}
+      {showHelp && (
+        <div onClick={closeHelp} style={{ position: "fixed", inset: 0, background: "rgba(74,59,50,.45)", display: "flex",
+          alignItems: "center", justifyContent: "center", padding: 18, zIndex: 30, overflowY: "auto" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400, width: "100%", background: CARD, borderRadius: 24, padding: "26px 22px", boxShadow: "0 20px 50px rgba(0,0,0,.25)" }}>
+            <div style={{ textAlign: "center", fontSize: 34 }}>📚🔁💰</div>
+            <h2 style={{ fontSize: 20, fontWeight: 900, textAlign: "center", margin: "4px 0 6px", color: CORAL_D }}>遊び方</h2>
+            <p style={{ fontSize: 12.5, color: "#8a7565", textAlign: "center", margin: "0 0 16px", fontWeight: 700, lineHeight: 1.7 }}>
+              種銭<b style={{ color: INK }}>30万円</b>から。もうけの合計が<b style={{ color: CORAL_D }}>100万円</b>になったらクリア＝<b style={{ color: CORAL_D }}>100万稼ぐ！</b><br />ツールをフル活用すると<b style={{ color: INK }}>約1年</b>で達成できるよ。
+            </p>
+            {[
+              ["📚", "本を仕入れる", "使ったお金は来月から3ヶ月に分けて、1.3倍になって戻ってくる（利益率30%）。"],
+              ["🏠", "月初の支払いを残す", "毎月あたまに固定費＋ツール代を支払う。払えなければ即倒産。めいっぱい使いは危険！"],
+              ["🔧", "ツールで加速する", "月額を払うと回転・利益率・仕入れ上限が大幅UP。フル活用すれば1年で100万も狙える。"],
+              ["⚠️", "現金を切らさない", "在庫が戻る前に現金が尽きたら倒産。入金予定と来月の支払いを見ながら仕入れよう。"],
+            ].map(([e, t, d]) => (
+              <div key={t} style={{ display: "flex", gap: 12, margin: "12px 0", alignItems: "flex-start" }}>
+                <div style={{ flex: "0 0 auto", width: 34, height: 34, borderRadius: 12, background: CORAL_BG, fontSize: 17,
+                  display: "flex", alignItems: "center", justifyContent: "center" }}>{e}</div>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 800 }}>{t}</div>
+                  <div style={{ fontSize: 11.5, color: "#8a7565", lineHeight: 1.65, fontWeight: 600 }}>{d}</div>
+                </div>
+              </div>
+            ))}
+            <button onClick={closeHelp} style={{ display: "block", width: "100%", marginTop: 8, fontFamily: "inherit", fontSize: 16,
+              fontWeight: 900, padding: "13px", borderRadius: 16, border: "none", background: CORAL, color: "#fff", cursor: "pointer", boxShadow: "0 4px 0 " + CORAL_D }}>
+              はじめる！
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 終了 */}
+      {s.over && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(74,59,50,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 18, zIndex: 20 }}>
+          <div style={{ maxWidth: 380, width: "100%", background: CARD, borderRadius: 24, padding: "30px 24px", textAlign: "center", boxShadow: "0 20px 50px rgba(0,0,0,.28)" }}>
+            <div style={{ fontSize: 46 }}>{s.over === "win" ? "👑" : s.over === "timeup" ? "🏁" : "💸"}</div>
+            <h2 style={{ fontSize: 22, fontWeight: 900, margin: "6px 0", color: s.over === "bankrupt" ? RED : CORAL_D }}>
+              {s.over === "win" ? "100万稼いだ！🎉" : s.over === "timeup" ? "7年間、完走！" : "資金ショート…"}
+            </h2>
+            <p style={{ fontSize: 13, color: "#8a7565", lineHeight: 1.9, fontWeight: 700 }}>
+              {s.over === "win"
+                ? `${ym(s.month)}で達成！固定費に食われず、仕入れて→戻して→また仕入れて…を回し切って、もうけの合計${fmt(s.cum)}。お金は「使う」んじゃなく「回す」——を体で覚えたね。`
+                : s.over === "timeup"
+                ? `もうけの合計は${fmt(s.cum)}まで届いた。あと${fmt(Math.max(0, GOAL - s.cum))}。仕入れペースとツールの使い方を変えてもう一回！`
+                : `${ym(s.month)}でストップ。月初の支払いが払えなかった…。在庫${fmt(stock)}はこれから戻ってくるはずだったのに。次は支払いぶんの現金を必ず残して回そう。`}
+            </p>
+            <div style={{ fontSize: 12, color: MUTED, margin: "10px 0 18px", fontWeight: 700 }}>
+              もうけ合計 {fmt(s.cum)} ／ 仕入れペース 月{fmt(pace)} ／ せどり力 Lv{s.level}「{LV_NAME[s.level]}」
+            </div>
+            <button onClick={() => setS(init())} style={{ fontFamily: "inherit", fontSize: 16, fontWeight: 900, padding: "13px 36px",
+              borderRadius: 16, border: "none", background: CORAL, color: "#fff", cursor: "pointer", boxShadow: "0 4px 0 " + CORAL_D }}>
+              もう一回まわす
+            </button>
+          </div>
+        </div>
+      )}
+
+      <footer style={{ textAlign: "center", fontSize: 11, color: "#B7A594", padding: "22px 16px 30px", fontWeight: 700 }}>
+        本せどり お金が回る体験ゲーム ／ 合同会社にしき
+      </footer>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
